@@ -93,10 +93,12 @@ def run(universe=None, period="3y", top_n=15, verbose=True):
             "rs_universe_returns": rs_returns,
         }
         scores = {}
+        reasonings = {}
         rejected_at = None
         for label, gate in CHAIN:
             res = gate.check(t, data)
             scores[label] = res.score
+            reasonings[label] = res.reasoning
             if not res.passed:
                 rejections[label].append(t)
                 rejected_at = (label, res.reasoning)
@@ -104,8 +106,10 @@ def run(universe=None, period="3y", top_n=15, verbose=True):
                 break
         if rejected_at is None:
             survivors.append({"ticker": t, "scores": scores,
+                              "reasonings": reasonings,
                               "total": round(sum(scores.values()), 1),
-                              "sector": info.get("sector")})
+                              "sector": info.get("sector"),
+                              "_data": data})
 
     # ---- Phase 4: boost survivors with a scheduled catalyst in the hold window ----
     hold = cfg["backtest"]["hold_days"]
@@ -121,6 +125,55 @@ def run(universe=None, period="3y", top_n=15, verbose=True):
         _print_summary(universe, rejections, survivors, top_n)
     return {"regime": regime, "survivors": survivors[:top_n],
             "all_survivors": survivors, "rejections": rejections}
+
+
+def run_llm_stage(survivors, top=None, with_propagation=True, verbose=True):
+    """Phase-5 LLM layer on the final survivors: news (8), sentiment (8.5),
+    veteran review (9), plus propagation (8.3). Runs only on `max_finalists`.
+
+    With no API keys, gates degrade to neutral passes (or run on LLM_MOCK=1).
+    Returns {"finalists": [...], "propagated": {ticker: reason}}.
+    """
+    from gates import (g8_news_catalyst, g8_3_propagation, g8_5_sentiment,
+                       g9_veteran_review)
+
+    cfg = load_config()["llm"]
+    finalists = survivors[: top or cfg["max_finalists"]]
+    out = []
+    for s in finalists:
+        t = s["ticker"]
+        d = dict(s.get("_data", {}))
+        news = g8_news_catalyst.check(t, d)
+        sentiment = g8_5_sentiment.check(t, d)
+        vet_data = {**d, "gate_scores": s["scores"], "catalyst": s.get("catalyst"),
+                    "setup": s.get("reasonings", {}).get("g5_setups"),
+                    "news_summary": news.reasoning}
+        veteran = g9_veteran_review.check(t, vet_data)
+        llm_passed = news.passed and veteran.passed
+        out.append({"ticker": t, "total": s["total"], "sector": s.get("sector"),
+                    "catalyst": s.get("catalyst"),
+                    "news": news, "sentiment": sentiment, "veteran": veteran,
+                    "llm_passed": llm_passed})
+
+    propagated = {}
+    if with_propagation:
+        cat_finalists = [(s["ticker"], s["catalyst"]["type"])
+                         for s in finalists if s.get("catalyst")]
+        propagated = g8_3_propagation.propagate(cat_finalists)
+
+    if verbose:
+        print(f"\n[funnel] LLM stage on {len(finalists)} finalists "
+              f"(mock={__import__('os').getenv('LLM_MOCK')=='1'}):")
+        for r in out:
+            v = "PASS" if r["llm_passed"] else "REJECT"
+            print(f"  [{v}] {r['ticker']:<6} news: {r['news'].reasoning}")
+            print(f"          veteran: {r['veteran'].reasoning}")
+            print(f"          {r['sentiment'].reasoning}")
+        if propagated:
+            print("  Read-through candidates added by propagation:")
+            for tk, why in propagated.items():
+                print(f"    {tk}: {why}")
+    return {"finalists": out, "propagated": propagated}
 
 
 def _print_summary(universe, rejections, survivors, top_n):

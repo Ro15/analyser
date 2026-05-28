@@ -12,6 +12,7 @@ __pycache__/
 *.csv
 *.parquet
 .cache/
+.state/
 
 # OS
 .DS_Store

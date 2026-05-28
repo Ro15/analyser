@@ -31,6 +31,14 @@ setups:
 data:
   history_years: 3
 
+# LLM layer (Phase 5) -- keys come from .env, never hardcoded
+llm:
+  deepseek_model: deepseek-chat
+  claude_model: claude-opus-4-7
+  monthly_cost_cap_usd: 20.0     # hard cap; calls refused once exceeded
+  max_finalists: 16              # LLM runs only on this many survivors
+  news_lookback_days: 14
+
 # Backtest
 backtest:
   universe_size: 40        # number of S&P names to replay (subset for speed)
