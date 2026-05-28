@@ -1,0 +1,32 @@
+# Catalyst Anticipation Swing Bot -- tunable configuration
+# Thresholds live here so gates stay declarative and the backtest can sweep them.
+
+universe: sp500
+
+# Gate 1 -- liquidity
+liquidity_min_dollar_volume: 10000000   # avg daily $ volume floor
+min_price: 10                           # min share price
+
+# Gate 0 -- market regime
+regime:
+  vix_max: 30                           # no alerts when VIX above this
+  spx_ma_days: 200                      # SPX must be above this MA
+  breadth_ma_days: 50                   # % of S&P above this MA (informational)
+
+# Gate 2 -- trend
+trend:
+  ma_days: 200
+  ma_slope_lookback: 21                 # trading days used to measure MA slope
+  base_max_atr_pct: 0.05                # "tight base" = ATR/price below this
+
+# Gate 5 -- setups
+setups:
+  pullback_ma_days: 50
+  pullback_proximity_pct: 0.04          # within +/-4% of rising 50-day MA
+  vcp_lookback: 50                      # window to detect volatility contraction
+  breakout_lookback: 50                 # window for prior high / base
+  breakout_volume_mult: 1.5             # breakout volume vs avg
+
+# Data
+data:
+  history_years: 3
