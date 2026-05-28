@@ -6,3 +6,5 @@ python-dotenv
 pyyaml
 pytest
 requests
+lxml
+pyarrow

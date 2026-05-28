@@ -1,0 +1,16 @@
+# Manually-seeded forward catalysts that aren't available from a free feed.
+# Extend freely. Dates are YYYY-MM-DD. type in:
+#   pdufa | analyst_day | product_launch | index_rebalance | lockup_expiry | other
+# Earnings dates are pulled dynamically from yfinance and need NOT be listed here.
+#
+# These are illustrative placeholders so the pipeline has data to act on; replace
+# with real, sourced dates before relying on them.
+seed:
+  NVDA:
+    - {date: 2026-06-25, type: product_launch, description: "GTC / next-gen GPU reveal (placeholder)"}
+  LLY:
+    - {date: 2026-07-15, type: pdufa, description: "PDUFA decision (placeholder)"}
+  AMD:
+    - {date: 2026-06-10, type: analyst_day, description: "Financial analyst day (placeholder)"}
+  AVGO:
+    - {date: 2026-07-01, type: product_launch, description: "Networking silicon launch (placeholder)"}

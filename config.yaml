@@ -30,3 +30,12 @@ setups:
 # Data
 data:
   history_years: 3
+
+# Backtest
+backtest:
+  universe_size: 40        # number of S&P names to replay (subset for speed)
+  step_days: 5             # evaluate gates every N trading days
+  hold_days: 90            # forward holding window (calendar days)
+  slippage_pct: 0.001      # 0.1% slippage applied each side
+  target_pct: 0.15         # +15% target
+  min_history_bars: 260    # require ~1y history before first eval

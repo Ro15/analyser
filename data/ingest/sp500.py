@@ -6,9 +6,13 @@ pipeline still runs offline / when Wikipedia changes layout.
 NOTE: this is CURRENT membership, not point-in-time -> backtest survivorship bias
 (see CLAUDE.md "Known Data Caveat").
 """
+import io
+
 import pandas as pd
+import requests
 
 WIKI_URL = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
+_UA = {"User-Agent": "Mozilla/5.0 (catalyst-swing-bot; research)"}
 
 # Fallback large-cap subset (not the full 500). Used only if the scrape fails.
 STATIC_FALLBACK = [
@@ -22,7 +26,9 @@ STATIC_FALLBACK = [
 def get_sp500_tickers():
     """Return a list of S&P 500 tickers (yfinance-friendly: '.' -> '-')."""
     try:
-        tables = pd.read_html(WIKI_URL)
+        resp = requests.get(WIKI_URL, headers=_UA, timeout=15)
+        resp.raise_for_status()
+        tables = pd.read_html(io.StringIO(resp.text))
         df = tables[0]
         tickers = df["Symbol"].astype(str).str.strip().tolist()
         tickers = [t.replace(".", "-") for t in tickers if t and t != "nan"]
