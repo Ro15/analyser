@@ -144,6 +144,7 @@ def run_llm_stage(survivors, top=None, with_propagation=True, verbose=True):
     With no API keys, gates degrade to neutral passes (or run on LLM_MOCK=1).
     Returns {"finalists": [...], "propagated": {ticker: reason}}.
     """
+    from data.ingest import news_multi
     from gates import (g8_news_catalyst, g8_3_propagation, g8_5_sentiment,
                        g9_veteran_review)
 
@@ -153,6 +154,9 @@ def run_llm_stage(survivors, top=None, with_propagation=True, verbose=True):
     for s in finalists:
         t = s["ticker"]
         d = dict(s.get("_data", {}))
+        headlines = news_multi.gather(t)  # free multi-source headlines for g8
+        if headlines:
+            d["headlines"] = headlines
         news = g8_news_catalyst.check(t, d)
         sentiment = g8_5_sentiment.check(t, d)
         vet_data = {**d, "gate_scores": s["scores"], "catalyst": s.get("catalyst"),

@@ -8,3 +8,5 @@ pytest
 requests
 lxml
 pyarrow
+feedparser
+beautifulsoup4
