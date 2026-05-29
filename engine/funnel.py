@@ -11,8 +11,7 @@ import logging
 
 from backtest import data_cache
 from catalyst import calendar_db
-from data.ingest.sp500 import get_sp500_tickers
-from engine import fundamentals
+from data.ingest import universe as universe_src
 from engine.config import load_config
 from engine.dataset import load_market
 from engine.indicators import sma
@@ -44,15 +43,23 @@ CHAIN = [
 ]
 
 
-def _prefetch_context(universe, period):
-    """Shared, computed-once context: market, sector ETFs, macro, RS universe."""
+def _prefetch_context(universe, period, max_age_hours=data_cache.LIVE_MAX_AGE_HOURS):
+    """Shared, computed-once context: market, sector ETFs, macro, RS universe.
+
+    `max_age_hours` keeps a live scan on fresh prices (refresh anything older);
+    the market series (^VIX/^GSPC) is always fetched fresh in load_market.
+    """
     market = load_market()
-    sector_etf_bars = {e: data_cache.get(e, period="1y") for e in ALL_SECTOR_ETFS}
-    macro = {m: data_cache.get(m, period="6mo") for m in MACRO_TICKERS}
+    sector_etf_bars = {e: data_cache.get(e, period="1y", max_age_hours=max_age_hours)
+                       for e in ALL_SECTOR_ETFS}
+    macro = {m: data_cache.get(m, period="6mo", max_age_hours=max_age_hours)
+             for m in MACRO_TICKERS}
+
+    data_cache.prefetch_bulk(universe, period=period, max_age_hours=max_age_hours)
 
     bars_by_ticker, rs_returns = {}, []
     for t in universe:
-        df = data_cache.get(t, period=period)
+        df = data_cache.get(t, period=period, max_age_hours=max_age_hours)
         if df.empty:
             continue
         bars_by_ticker[t] = df
@@ -64,7 +71,7 @@ def _prefetch_context(universe, period):
 def run(universe=None, period="3y", top_n=15, verbose=True):
     cfg = load_config()
     if universe is None:
-        universe = get_sp500_tickers()[: cfg["backtest"]["universe_size"]]
+        universe = universe_src.get_universe()
 
     market, sector_etf_bars, macro, bars_by_ticker, rs_returns = _prefetch_context(
         universe, period
@@ -80,14 +87,17 @@ def run(universe=None, period="3y", top_n=15, verbose=True):
 
     rejections = {label: [] for label, _ in CHAIN}
     survivors = []
+    # Sector comes from the universe metadata (the screener), so the cheap
+    # technical gates never trigger a per-stock fundamentals fetch. The
+    # fundamental gates (g5.5+) self-fetch fundamentals.info on demand, so only
+    # names that survive the cheap filters ever pay that cost.
+    sector_by_ticker = universe_src.load_sector_map()
 
     for t, bars in bars_by_ticker.items():
-        info = fundamentals.info(t)
         data = {
             "bars": bars,
             "vix": market["vix"], "spx": market["spx"],
-            "sector": info.get("sector"),
-            "info": info,
+            "sector": sector_by_ticker.get(t),
             "macro": macro,
             "sector_etf_bars": sector_etf_bars,
             "rs_universe_returns": rs_returns,
@@ -108,7 +118,7 @@ def run(universe=None, period="3y", top_n=15, verbose=True):
             survivors.append({"ticker": t, "scores": scores,
                               "reasonings": reasonings,
                               "total": round(sum(scores.values()), 1),
-                              "sector": info.get("sector"),
+                              "sector": data["sector"],
                               "_data": data})
 
     # ---- Phase 4: boost survivors with a scheduled catalyst in the hold window ----

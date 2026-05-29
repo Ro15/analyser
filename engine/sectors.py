@@ -40,6 +40,36 @@ MACRO_SENSITIVITY = {
 
 MACRO_TICKERS = ["^TNX", "DX-Y.NYB", "CL=F", "GC=F", "^SOX"]
 
+# The NASDAQ screener (our universe source) names sectors differently from the
+# GICS names used above. Map screener -> GICS so the sector gates line up.
+# "Miscellaneous" has no clean GICS sector -> left unmapped (gate goes neutral).
+NASDAQ_SECTOR_TO_GICS = {
+    "Technology": "Technology",
+    "Finance": "Financial Services",
+    "Health Care": "Healthcare",
+    "Consumer Discretionary": "Consumer Cyclical",
+    "Consumer Staples": "Consumer Defensive",
+    "Energy": "Energy",
+    "Industrials": "Industrials",
+    "Basic Materials": "Basic Materials",
+    "Utilities": "Utilities",
+    "Real Estate": "Real Estate",
+    "Telecommunications": "Communication Services",
+}
+
+
+def to_gics(sector):
+    """Normalize a sector name to the GICS vocabulary used here.
+
+    Returns the input unchanged if it's already GICS, the mapped name for a
+    NASDAQ-screener label, or None if it can't be mapped.
+    """
+    if not sector:
+        return None
+    if sector in SECTOR_ETF:
+        return sector
+    return NASDAQ_SECTOR_TO_GICS.get(sector)
+
 
 def etf_for_sector(sector):
     return SECTOR_ETF.get(sector)

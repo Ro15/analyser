@@ -21,7 +21,7 @@ import datetime as dt
 
 from alerts import formatter, telegram_bot
 from catalyst import relationship_map
-from data.ingest.sp500 import get_sp500_tickers
+from data.ingest import universe as universe_src
 from engine import funnel, structuring
 from engine.config import load_config
 from gates import g9_5_correlation
@@ -33,7 +33,7 @@ MAX_ALERTS = 4
 def run_scan(universe=None, dry_run=None, verbose=True):
     cfg = load_config()
     if universe is None:
-        universe = get_sp500_tickers()[: cfg["backtest"]["universe_size"]]
+        universe = universe_src.get_universe()
 
     result = funnel.run(universe=universe, top_n=cfg["llm"]["max_finalists"],
                         verbose=verbose)
@@ -101,6 +101,6 @@ if __name__ == "__main__":
     ap.add_argument("--live", action="store_true",
                     help="actually send Telegram (default dry-run)")
     args = ap.parse_args()
-    uni = get_sp500_tickers()[: args.universe] if args.universe else None
+    uni = universe_src.get_universe()[: args.universe] if args.universe else None
     print(f"[scan] {dt.datetime.now():%Y-%m-%d %H:%M} starting nightly scan")
     run_scan(universe=uni, dry_run=not args.live)
