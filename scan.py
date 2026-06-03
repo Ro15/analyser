@@ -21,12 +21,13 @@ import argparse
 import datetime as dt
 
 from alerts import formatter, telegram_bot
+from backtest import data_cache
 from catalyst import relationship_map
 from data.ingest import universe as universe_src
 from engine import funnel, structuring
 from engine.config import load_config
 from gates import g9_5_correlation
-from journal import tracker
+from journal import tracker, tuner
 
 def run_scan(universe=None, dry_run=None, verbose=True):
     cfg = load_config()
@@ -99,6 +100,35 @@ def run_scan(universe=None, dry_run=None, verbose=True):
     return messages
 
 
+def nightly_housekeeping(verbose=True):
+    """Run every night regardless of alert count: mark stale positions
+    resolved, and ask the tuner to nudge per-gate weights. The tuner is a
+    no-op until enough trades have closed (>=20 by default)."""
+    _resolve_open_positions(verbose=verbose)
+    result = tuner.tune()
+    if verbose:
+        print(f"[scan] tuner: {result.get('status')}")
+
+
+def _resolve_open_positions(verbose=True):
+    """Auto-resolve any open journal entries against today's last close."""
+    open_ = tracker.open_alerts()
+    if not open_:
+        return
+
+    def _price_now(ticker):
+        df = data_cache.get(ticker, period="3y")
+        if df is None or df.empty:
+            return None
+        return float(df["close"].iloc[-1])
+
+    tracker.mark_resolutions(_price_now)
+    closed = [r for r in tracker.all_alerts() if r["status"] == "closed"]
+    if verbose:
+        still_open = tracker.open_alerts()
+        print(f"[scan] journal: {len(closed)} closed, {len(still_open)} open")
+
+
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--universe", type=int, default=None,
@@ -108,4 +138,8 @@ if __name__ == "__main__":
     args = ap.parse_args()
     uni = universe_src.get_universe()[: args.universe] if args.universe else None
     print(f"[scan] {dt.datetime.now():%Y-%m-%d %H:%M} starting nightly scan")
-    run_scan(universe=uni, dry_run=not args.live)
+    try:
+        run_scan(universe=uni, dry_run=not args.live)
+    finally:
+        # Always run housekeeping (resolutions + tuner) even on no-alert nights.
+        nightly_housekeeping(verbose=True)

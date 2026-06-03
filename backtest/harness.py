@@ -15,9 +15,14 @@ prints this warning prominently.
 import pandas as pd
 
 from backtest import data_cache
+from data.ingest import universe as universe_src
 from data.ingest.sp500 import get_sp500_tickers
+from engine import voting
 from engine.config import load_config
-from gates import g0_regime, g1_liquidity, g2_trend, g5_setups
+from engine.sectors import ALL_SECTOR_ETFS
+from gates import (g0_regime, g1_liquidity, g2_trend, g3_sector,
+                   g4_relative_strength, g5_3_priced_in, g5_setups,
+                   g6_volume_flow)
 
 
 def _slice(df, asof):
@@ -133,6 +138,164 @@ def _spy_window_return(spy, entry_date, exit_date, slippage):
     entry = float(spy.loc[e[0], "close"]) * (1 + slippage)
     exit_ = float(spy.loc[x[0], "close"]) * (1 - slippage)
     return exit_ / entry - 1
+
+
+# --- Hybrid backtest (technical subset) ----------------------------------
+# Mirrors the live hybrid funnel using ONLY price/volume gates -- fundamentals
+# (g5.5, g5.7, g6.5, g7, g7.5) have no point-in-time data on yfinance, so
+# running them historically would leak look-ahead. The technical-subset is
+# enough to calibrate `vote_threshold` and verify the math beats SPY before
+# anything goes live.
+
+_HYBRID_VOTERS = ["g2_trend", "g3_sector", "g4_rel_strength",
+                  "g5.3_priced_in", "g6_volume_flow"]
+
+
+def _rs_returns_at(asof, ticker_bars, lookback=127):
+    out = []
+    for df in ticker_bars.values():
+        s = df.loc[:asof]
+        if len(s) > lookback:
+            out.append(float(s["close"].iloc[-1] / s["close"].iloc[-lookback] - 1))
+    return out
+
+
+def run_hybrid_backtest(universe=None, period="3y", vote_threshold=None, verbose=True):
+    """Backtest the hybrid technical subset (no fundamentals -> no look-ahead).
+
+    Guardrails (block on fail): g1_liquidity, g5_setups.
+    Voters (weighted mean): g2_trend, g3_sector, g4_rel_strength,
+        g5.3_priced_in, g6_volume_flow.
+
+    A stock advances to a forward-return measurement only if all guardrails
+    passed AND the weighted vote >= `vote_threshold` (defaults to
+    config.funnel.vote_threshold).
+    """
+    cfg = load_config()
+    funnel_cfg = cfg.get("funnel", {}) or {}
+    if vote_threshold is None:
+        vote_threshold = funnel_cfg.get("vote_threshold", 7.0)
+    weights = funnel_cfg.get("default_weights", {}) or {}
+    bt = cfg["backtest"]
+    slippage = bt["slippage_pct"]
+    hold = bt["hold_days"]
+    step = bt["step_days"]
+    min_bars = bt["min_history_bars"]
+
+    if universe is None:
+        universe = universe_src.get_universe()[: bt["universe_size"]]
+
+    if verbose:
+        print(f"[hybrid backtest] universe={len(universe)}, threshold={vote_threshold}, "
+              f"hold={hold}d, step={step}d, slippage={slippage*100:.2f}%/side")
+        print("[hybrid backtest] WARNING: SURVIVORSHIP BIAS (current universe used "
+              "for all history) -- results are optimistic. Technical subset only.")
+
+    vix = data_cache.get("^VIX", period=period)
+    spx = data_cache.get("^GSPC", period=period)
+    spy = data_cache.get("SPY", period=period)
+
+    sector_etf_full = {e: data_cache.get(e, period=period) for e in ALL_SECTOR_ETFS}
+    sector_by_t = universe_src.load_sector_map()
+
+    bars_by_t = {}
+    for t in universe:
+        df = data_cache.get(t, period=period)
+        if not df.empty and len(df) >= min_bars:
+            bars_by_t[t] = df
+
+    if verbose:
+        print(f"[hybrid backtest] {len(bars_by_t)} tickers with sufficient history")
+
+    alerts = []
+    rejections = {"g0_regime": 0, "g1_liquidity": 0, "g5_setups": 0, "vote": 0}
+    for t, df in bars_by_t.items():
+        for pos in range(min_bars, len(df) - 1, step):
+            asof = df.index[pos]
+            bars = _slice(df, asof)
+            _assert_no_lookahead(bars, asof)
+
+            vix_s = _slice(vix, asof)
+            spx_s = _slice(spx, asof)
+
+            if not g0_regime.check("MARKET", {"vix": vix_s, "spx": spx_s}).passed:
+                rejections["g0_regime"] += 1
+                continue
+
+            sector_etf_bars = {e: _slice(b, asof) for e, b in sector_etf_full.items()}
+            rs_returns = _rs_returns_at(asof, bars_by_t)
+            data = {
+                "bars": bars, "vix": vix_s, "spx": spx_s,
+                "sector": sector_by_t.get(t),
+                "sector_etf_bars": sector_etf_bars,
+                "rs_universe_returns": rs_returns,
+            }
+
+            if not g1_liquidity.check(t, data).passed:
+                rejections["g1_liquidity"] += 1
+                continue
+            if not g5_setups.check(t, data).passed:
+                rejections["g5_setups"] += 1
+                continue
+
+            scores = {
+                "g2_trend":        g2_trend.check(t, data).score,
+                "g3_sector":       g3_sector.check(t, data).score,
+                "g4_rel_strength": g4_relative_strength.check(t, data).score,
+                "g5.3_priced_in":  g5_3_priced_in.check(t, data).score,
+                "g6_volume_flow":  g6_volume_flow.check(t, data).score,
+            }
+            vote = voting.compute_vote(scores, _HYBRID_VOTERS, weights)
+            if vote < vote_threshold:
+                rejections["vote"] += 1
+                continue
+
+            fwd = _forward_return(df, pos, hold, slippage)
+            if fwd is None:
+                continue
+            spy_ret = _spy_window_return(spy, fwd["entry_date"], fwd["exit_date"], slippage)
+            alerts.append({
+                "ticker": t, "vote": round(vote, 2),
+                **fwd,
+                "spy_ret": spy_ret,
+                "excess": fwd["ret"] - (spy_ret if spy_ret is not None else 0.0),
+            })
+
+    if verbose:
+        print(f"[hybrid backtest] {len(alerts)} simulated alerts at threshold {vote_threshold}")
+        print(f"[hybrid backtest] rejections: {rejections}")
+    return pd.DataFrame(alerts)
+
+
+def sweep_thresholds(thresholds=None, universe=None, period="3y", verbose=True):
+    """Run the hybrid backtest at several thresholds; print/return a comparison.
+
+    Higher threshold = fewer alerts, hopefully higher excess vs SPY.
+    """
+    thresholds = thresholds or [5.0, 6.0, 6.5, 7.0, 7.5]
+    rows = []
+    for thr in thresholds:
+        df = run_hybrid_backtest(universe=universe, period=period,
+                                 vote_threshold=thr, verbose=False)
+        if df.empty:
+            rows.append({"threshold": thr, "alerts": 0, "avg_ret": float("nan"),
+                         "avg_spy": float("nan"), "excess": float("nan"),
+                         "win_rate": float("nan")})
+            continue
+        valid_spy = df["spy_ret"].dropna()
+        rows.append({
+            "threshold": thr,
+            "alerts": len(df),
+            "avg_ret": df["ret"].mean(),
+            "avg_spy": valid_spy.mean() if len(valid_spy) else float("nan"),
+            "excess": df["excess"].mean(),
+            "win_rate": (df["ret"] > 0).mean(),
+        })
+    out = pd.DataFrame(rows)
+    if verbose:
+        print("\n[threshold sweep] (technical-subset hybrid, current-universe survivorship-biased)")
+        print(out.to_string(index=False, float_format=lambda x: f"{x:.3f}"))
+    return out
 
 
 if __name__ == "__main__":

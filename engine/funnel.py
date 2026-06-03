@@ -12,6 +12,7 @@ import logging
 from backtest import data_cache
 from catalyst import calendar_db
 from data.ingest import universe as universe_src
+from engine import voting
 from engine.config import load_config
 from journal import tuner
 from engine.dataset import load_market
@@ -128,13 +129,7 @@ def run(universe=None, period="3y", top_n=15, verbose=True):
             continue
 
         # Weighted vote across the voter gates that scored this ticker.
-        wsum, wden = 0.0, 0.0
-        for label in voter_set:
-            if label in scores:
-                w = weights.get(label, 1.0)
-                wsum += w * scores[label]
-                wden += w
-        vote = wsum / wden if wden else 0.0
+        vote = voting.compute_vote(scores, voter_set, weights)
 
         if vote < threshold:
             rejections["vote_threshold"].append(t)

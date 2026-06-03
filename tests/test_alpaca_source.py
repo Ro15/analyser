@@ -78,6 +78,26 @@ def test_effective_weights_merges_learned_over_defaults(tmp_path, monkeypatch):
     assert merged.get("g5.3_priced_in") is None  # caller falls back to 1.0
 
 
+def test_compute_vote_weighted_mean():
+    """Weighted mean over voters; missing labels skipped; empty -> 0."""
+    from engine import voting
+    scores = {"g2_trend": 8.0, "g3_sector": 6.0, "g4_rel_strength": 10.0}
+    weights = {"g2_trend": 1.2, "g3_sector": 0.8, "g4_rel_strength": 2.0}
+    voters = ["g2_trend", "g3_sector", "g4_rel_strength"]
+    expected = (1.2 * 8.0 + 0.8 * 6.0 + 2.0 * 10.0) / (1.2 + 0.8 + 2.0)
+    assert abs(voting.compute_vote(scores, voters, weights) - expected) < 1e-9
+
+    # Missing voter labels are skipped silently.
+    assert voting.compute_vote({"g2_trend": 5.0}, ["g2_trend", "g3_sector"],
+                                {"g2_trend": 1.0, "g3_sector": 1.0}) == 5.0
+
+    # Missing weight defaults to 1.0.
+    assert voting.compute_vote({"g2_trend": 5.0}, ["g2_trend"], {}) == 5.0
+
+    # No voters present -> 0.0.
+    assert voting.compute_vote({}, [], {}) == 0.0
+
+
 def test_effective_weights_no_file_returns_defaults(tmp_path, monkeypatch):
     from journal import tuner
     monkeypatch.setattr(tuner, "_PATH", str(tmp_path / "missing.json"))
