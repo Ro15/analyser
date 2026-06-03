@@ -1,12 +1,13 @@
-"""Gate 9 -- veteran review (Claude).
+"""Gate 9 -- veteran review (Claude -> DeepSeek fallback).
 
 Full-context review of a finalist: red-team the thesis, cite 3-5 historical
 analog setups, and output a calibrated probability of +15% within 90 days plus
 conviction 1-5. REJECT if the verdict is "would not take" OR conviction < 3.
 
-When Claude is unavailable (no key, cap reached), the gate CANNOT vouch for the
-name, so it passes with a neutral score but flags that no review occurred --
-the structuring layer / operator should treat that as un-vetted.
+Tries Claude first (the original reviewer). When Claude is unavailable (no key,
+cap reached), falls back to DeepSeek with the same prompt -- cheap and capable
+enough for this judgement, and far better than skipping the review entirely.
+Only if BOTH are unavailable does the gate pass with an UN-VETTED warning.
 """
 import json
 
@@ -42,14 +43,21 @@ def _context(ticker, data):
 
 def check(ticker, data):
     user = _context(ticker, data)
+    used = None
     try:
         raw = llm_client.call_claude(_SYSTEM, user)
-    except llm_client.LLMUnavailable as e:
-        return GateResult(True, 5.0, f"Veteran review SKIPPED ({e}) -> UN-VETTED, treat with caution.")
+        used = "Claude"
+    except llm_client.LLMUnavailable:
+        try:
+            raw = llm_client.call_deepseek(_SYSTEM, user, max_tokens=700)
+            used = "DeepSeek"
+        except llm_client.LLMUnavailable as e:
+            return GateResult(True, 5.0,
+                              f"Veteran review SKIPPED ({e}) -> UN-VETTED, treat with caution.")
 
     parsed = llm_client.extract_json(raw)
     if not parsed:
-        return GateResult(True, 5.0, "Veteran review unparseable -> UN-VETTED.")
+        return GateResult(True, 5.0, f"Veteran review (via {used}) unparseable -> UN-VETTED.")
 
     verdict = str(parsed.get("verdict", "")).lower()
     conviction = parsed.get("conviction", 0) or 0
@@ -58,9 +66,10 @@ def check(ticker, data):
 
     if "not take" in verdict or conviction < 3:
         return GateResult(False, float(conviction),
-                          f"Veteran REJECT (verdict='{verdict}', conviction={conviction}). {summary}")
+                          f"Veteran REJECT via {used} (verdict='{verdict}', "
+                          f"conviction={conviction}). {summary}")
 
     score = round(min(10.0, conviction * 2.0), 2)
     prob_txt = f", p(+15%/90d)={prob:.0%}" if isinstance(prob, (int, float)) else ""
     return GateResult(True, score,
-                      f"Veteran APPROVE (conviction {conviction}/5{prob_txt}). {summary}")
+                      f"Veteran APPROVE via {used} (conviction {conviction}/5{prob_txt}). {summary}")

@@ -39,7 +39,8 @@ def _why_lines(reasonings, scores, limit=5):
 
 
 def format_alert(plan, news=None, veteran=None, read_through=None,
-                 reasonings=None, vote=None, sector=None, scores=None):
+                 reasonings=None, vote=None, sector=None, scores=None,
+                 thesis=None):
     t = plan["ticker"]
     header = f"📈 *{t}* — catalyst-anticipation swing"
     if vote is not None:
@@ -49,6 +50,9 @@ def format_alert(plan, news=None, veteran=None, read_through=None,
         meta_bits.append(f"Vote: {vote:.2f}/10")
         header += "\n" + " | ".join(meta_bits)
     lines = [header]
+
+    if thesis:
+        lines.append(f"\n*Thesis (AI):* {thesis}")
 
     cat = plan.get("catalyst")
     if cat:

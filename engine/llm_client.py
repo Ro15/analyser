@@ -109,7 +109,7 @@ def _retry(fn, retries=3):
 
 def call_deepseek(system, user, json_mode=True, max_tokens=800):
     if mock_mode():
-        return _mock_response("deepseek", user)
+        return _mock_response("deepseek", user, system=system, json_mode=json_mode)
     key = os.getenv("DEEPSEEK_API_KEY")
     if not key:
         raise LLMUnavailable("DEEPSEEK_API_KEY not set.")
@@ -140,7 +140,7 @@ def call_deepseek(system, user, json_mode=True, max_tokens=800):
 
 def call_claude(system, user, max_tokens=1500):
     if mock_mode():
-        return _mock_response("claude", user)
+        return _mock_response("claude", user, system=system)
     key = os.getenv("ANTHROPIC_API_KEY")
     if not key:
         raise LLMUnavailable("ANTHROPIC_API_KEY not set.")
@@ -167,16 +167,30 @@ def call_claude(system, user, max_tokens=1500):
     return "".join(block.get("text", "") for block in resp.get("content", []))
 
 
-def _mock_response(provider, user):
-    """Deterministic canned JSON for dry-run/tests (no key/network)."""
-    if provider == "deepseek":
+def _mock_response(provider, user, system="", json_mode=True):
+    """Deterministic canned response for dry-run / LLM_MOCK=1 (no key/network).
+
+    Detects the kind of call from the system prompt so each gate gets a
+    sensibly-shaped mock instead of a single hard-coded blob.
+    """
+    sys_lower = (system or "").lower()
+
+    if not json_mode:
+        return ("[MOCK thesis] Anticipated catalyst not yet priced in; healthy "
+                "uptrend with a defined entry; risk/reward asymmetric.")
+
+    # Veteran-style review (used by g9; same prompt whether Claude or DeepSeek).
+    if provider == "claude" or "veteran" in sys_lower or "conviction" in sys_lower:
         return json.dumps({
-            "sentiment": "positive", "catalyst_type": "product_launch",
-            "imminence": "coming", "red_flags": [],
-            "summary": "[MOCK] Anticipated catalyst not yet reflected in price."})
+            "verdict": "would take", "conviction": 4,
+            "probability_15pct_90d": 0.42,
+            "thesis_risks": ["[MOCK] valuation re-rate", "[MOCK] catalyst slips"],
+            "analogs": ["[MOCK] analog A +18%", "[MOCK] analog B +12%",
+                        "[MOCK] analog C -5%"],
+            "summary": "[MOCK] Constructive setup with defined invalidation."})
+
+    # Default: news catalyst (g8).
     return json.dumps({
-        "verdict": "would take", "conviction": 4,
-        "probability_15pct_90d": 0.42,
-        "thesis_risks": ["[MOCK] valuation re-rate", "[MOCK] catalyst slips"],
-        "analogs": ["[MOCK] analog A +18%", "[MOCK] analog B +12%", "[MOCK] analog C -5%"],
-        "summary": "[MOCK] Constructive setup with defined invalidation."})
+        "sentiment": "positive", "catalyst_type": "product_launch",
+        "imminence": "coming", "red_flags": [],
+        "summary": "[MOCK] Anticipated catalyst not yet reflected in price."})

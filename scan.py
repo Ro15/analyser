@@ -24,7 +24,7 @@ from alerts import formatter, telegram_bot
 from backtest import data_cache
 from catalyst import relationship_map
 from data.ingest import universe as universe_src
-from engine import funnel, structuring
+from engine import funnel, structuring, thesis
 from engine.config import load_config
 from gates import g9_5_correlation
 from journal import tracker, tuner
@@ -82,6 +82,15 @@ def run_scan(universe=None, dry_run=None, verbose=True):
             regime="risk_on",
             scores=s.get("scores"),
         )
+        thesis_text = thesis.generate(
+            t,
+            sector=s.get("sector"),
+            vote=s.get("vote"),
+            catalyst=s.get("catalyst"),
+            setup_reasoning=s.get("reasonings", {}).get("g5_setups"),
+            news_summary=(lr.get("news").reasoning if lr.get("news") else None),
+            veteran_summary=(vet.reasoning if vet else None),
+        )
         msg = formatter.format_alert(
             plan,
             news=(lr.get("news").reasoning if lr.get("news") else None),
@@ -90,6 +99,7 @@ def run_scan(universe=None, dry_run=None, verbose=True):
             reasonings=s.get("reasonings"),
             vote=s.get("vote"),
             sector=s.get("sector"),
+            thesis=thesis_text,
         )
         messages.append(msg)
 
