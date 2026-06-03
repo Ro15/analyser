@@ -92,8 +92,9 @@ def run_scan(universe=None, dry_run=None, verbose=True):
         )
         messages.append(msg)
 
+    is_live = (not dry_run) and telegram_bot.is_configured()
     print(f"\n[scan] firing {len(messages)} alert(s) "
-          f"({'DRY-RUN' if not telegram_bot.is_configured() else 'LIVE'}):\n")
+          f"({'LIVE' if is_live else 'DRY-RUN'}):\n")
     telegram_bot.send_alerts(messages, dry_run=dry_run)
     return messages
 
