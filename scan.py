@@ -1,20 +1,21 @@
-"""Nightly entry point: run the full funnel end-to-end and fire alerts.
+"""Nightly entry point: run the full hybrid funnel end-to-end and fire alerts.
 
 Pipeline:
-  1. deterministic funnel (gates 0..7.5) + catalyst boost   [engine.funnel.run]
-  2. LLM stage (8 news, 8.5 sentiment, 9 veteran, 8.3 propagation)
+  1. hybrid voting funnel (guardrails block, voters score)  [engine.funnel.run]
+  2. LLM stage (8 news / DeepSeek, 9 veteran, 8.5 sentiment, 8.3 propagation)
   3. correlation / concentration filter (gate 9.5)
   4. structuring (gate 10) -> entry/target/invalidation/time-stop
-  5. journal each alert (gate 12)
-  6. send 3-4 Telegram alerts (DRY-RUN unless TELEGRAM_* configured)
+  5. journal each alert
+  6. send up to `funnel.max_alerts` Telegram messages (DRY-RUN unless TELEGRAM_* set)
 
 Usage:
-  python scan.py                 # paper/dry-run, default universe slice
-  LLM_MOCK=1 python scan.py      # exercise LLM stage with canned responses
-  python scan.py --universe 200  # larger universe slice
+  python scan.py                 # full universe, dry-run telegram
+  LLM_MOCK=1 python scan.py      # canned LLM responses (no key/network)
+  python scan.py --universe 200  # smaller slice for testing
+  python scan.py --live          # actually push to Telegram (used by the schedule)
 
-Scheduling: run nightly via cron, e.g. ~2 AM ET (after US close, before open):
-  0 2 * * 1-5  cd /path/to/analyser && /usr/bin/python3 scan.py >> scan.log 2>&1
+Scheduling: install the launchd agent that runs this every weeknight at 22:00:
+  bash scripts/install_schedule.sh
 """
 import argparse
 import datetime as dt
@@ -27,11 +28,9 @@ from engine.config import load_config
 from gates import g9_5_correlation
 from journal import tracker
 
-MAX_ALERTS = 4
-
-
 def run_scan(universe=None, dry_run=None, verbose=True):
     cfg = load_config()
+    max_alerts = cfg.get("funnel", {}).get("max_alerts", 2)
     if universe is None:
         universe = universe_src.get_universe()
 
@@ -52,7 +51,12 @@ def run_scan(universe=None, dry_run=None, verbose=True):
     approved_tickers = {r["ticker"] for r in llm["finalists"] if r["llm_passed"]}
     llm_by_ticker = {r["ticker"]: r for r in llm["finalists"]}
 
-    candidates = [s for s in survivors if s["ticker"] in approved_tickers] or survivors
+    # Safety: if the LLM rejected everything (e.g. fraud flag night, negative
+    # news everywhere), send NO alerts. Never resurrect a hard-flagged name.
+    candidates = [s for s in survivors if s["ticker"] in approved_tickers]
+    if not candidates:
+        print("[scan] LLM rejected all finalists -> no alerts tonight.")
+        return []
 
     # Correlation / concentration filter (gate 9.5).
     kept, dropped = g9_5_correlation.filter_candidates(candidates)
@@ -61,15 +65,12 @@ def run_scan(universe=None, dry_run=None, verbose=True):
         for d in dropped:
             print(f"    {d['ticker']}: {d['drop_reason']}")
 
-    alerts = kept[:MAX_ALERTS]
+    alerts = kept[:max_alerts]
     messages = []
     for s in alerts:
         t = s["ticker"]
         lr = llm_by_ticker.get(t, {})
         vet = lr.get("veteran")
-        conviction = None
-        if vet and "conviction" in (vet.reasoning or ""):
-            conviction = None  # parsed conviction lives in the LLM result if needed
         plan = structuring.build_plan(t, s.get("_data", {}), catalyst=s.get("catalyst"))
         if plan is None:
             continue
@@ -85,6 +86,9 @@ def run_scan(universe=None, dry_run=None, verbose=True):
             news=(lr.get("news").reasoning if lr.get("news") else None),
             veteran=(vet.reasoning if vet else None),
             read_through=relationship_map.read_through(t)[:4] or None,
+            reasonings=s.get("reasonings"),
+            vote=s.get("vote"),
+            sector=s.get("sector"),
         )
         messages.append(msg)
 

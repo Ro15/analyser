@@ -31,6 +31,38 @@ setups:
 data:
   history_years: 3
 
+# Hybrid voting funnel -- which gates BLOCK vs VOTE, the pass threshold,
+# the alert cap, and the per-voter default weights (overridden by anything
+# learned in .state/gate_weights.json once the tuner has data).
+funnel:
+  vote_threshold: 7.0       # tighter = fewer, higher-conviction alerts
+  max_alerts: 2             # hard cap on alerts per night
+  guardrails:               # failing any of these = immediate reject
+    - g1_liquidity
+    - g5_setups
+    - g5.5_valuation
+    - g7_earnings_block
+  voters:                   # weighted vote; never block alone
+    - g2_trend
+    - g2.5_macro
+    - g3_sector
+    - g4_rel_strength
+    - g5.3_priced_in
+    - g6_volume_flow
+    - g5.7_fundamentals
+    - g7.5_earnings_quality
+    - g6.5_smart_money
+  default_weights:
+    g2_trend: 1.2
+    g4_rel_strength: 1.2
+    g3_sector: 0.9
+    g2.5_macro: 1.0
+    g5.3_priced_in: 1.0
+    g6_volume_flow: 1.0
+    g5.7_fundamentals: 1.1
+    g7.5_earnings_quality: 1.0
+    g6.5_smart_money: 0.8
+
 # LLM layer (Phase 5) -- keys come from .env, never hardcoded
 llm:
   deepseek_model: deepseek-chat

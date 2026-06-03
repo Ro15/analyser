@@ -63,6 +63,29 @@ def test_get_universe_rebuilds_when_stale(tmp_path, monkeypatch):
     assert U.get_universe(max_age_days=7) == ["NVDA"]
 
 
+def test_effective_weights_merges_learned_over_defaults(tmp_path, monkeypatch):
+    """Three tiers: learned beats default beats 1.0 fallback."""
+    from journal import tuner
+
+    learned_path = tmp_path / "weights.json"
+    learned_path.write_text('{"g2_trend": 1.4}')
+    monkeypatch.setattr(tuner, "_PATH", str(learned_path))
+
+    defaults = {"g2_trend": 1.2, "g3_sector": 0.9}
+    merged = tuner.effective_weights(defaults)
+    assert merged["g2_trend"] == 1.4   # learned overrides default
+    assert merged["g3_sector"] == 0.9  # default kept where no learning
+    assert merged.get("g5.3_priced_in") is None  # caller falls back to 1.0
+
+
+def test_effective_weights_no_file_returns_defaults(tmp_path, monkeypatch):
+    from journal import tuner
+    monkeypatch.setattr(tuner, "_PATH", str(tmp_path / "missing.json"))
+    assert tuner.effective_weights({"g2_trend": 1.2}) == {"g2_trend": 1.2}
+    assert tuner.effective_weights({}) == {}
+    assert tuner.effective_weights(None) == {}
+
+
 def test_cache_freshness_rule(tmp_path):
     """Stale files refresh when max_age_hours is set; never expire when None."""
     from backtest import data_cache

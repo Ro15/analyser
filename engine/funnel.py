@@ -13,6 +13,7 @@ from backtest import data_cache
 from catalyst import calendar_db
 from data.ingest import universe as universe_src
 from engine.config import load_config
+from journal import tuner
 from engine.dataset import load_market
 from engine.indicators import sma
 from engine.sectors import ALL_SECTOR_ETFS, MACRO_TICKERS
@@ -85,7 +86,15 @@ def run(universe=None, period="3y", top_n=15, verbose=True):
     if not regime.passed:
         return {"regime": regime, "survivors": [], "rejections": {"g0_regime": list(universe)}}
 
+    # ---- Hybrid voting setup: guardrails block, voters get a weighted vote ----
+    funnel_cfg = cfg.get("funnel") or {}
+    guardrails = set(funnel_cfg.get("guardrails", []))
+    voter_set = set(funnel_cfg.get("voters", []))
+    threshold = funnel_cfg.get("vote_threshold", 5.0)
+    weights = tuner.effective_weights(funnel_cfg.get("default_weights", {}))
+
     rejections = {label: [] for label, _ in CHAIN}
+    rejections["vote_threshold"] = []   # synthetic bucket for "vote too low"
     survivors = []
     # Sector comes from the universe metadata (the screener), so the cheap
     # technical gates never trigger a per-stock fundamentals fetch. The
@@ -102,24 +111,42 @@ def run(universe=None, period="3y", top_n=15, verbose=True):
             "sector_etf_bars": sector_etf_bars,
             "rs_universe_returns": rs_returns,
         }
-        scores = {}
-        reasonings = {}
-        rejected_at = None
+        scores, reasonings = {}, {}
+        guardrail_failed = None
         for label, gate in CHAIN:
             res = gate.check(t, data)
             scores[label] = res.score
             reasonings[label] = res.reasoning
-            if not res.passed:
+            if label in guardrails and not res.passed:
                 rejections[label].append(t)
-                rejected_at = (label, res.reasoning)
-                log.info("REJECT %s at %s: %s", t, label, res.reasoning)
+                guardrail_failed = (label, res.reasoning)
+                log.info("BLOCK %s at %s: %s", t, label, res.reasoning)
                 break
-        if rejected_at is None:
-            survivors.append({"ticker": t, "scores": scores,
-                              "reasonings": reasonings,
-                              "total": round(sum(scores.values()), 1),
-                              "sector": data["sector"],
-                              "_data": data})
+            # voters: never break -- their `passed` is informational, score counts
+
+        if guardrail_failed:
+            continue
+
+        # Weighted vote across the voter gates that scored this ticker.
+        wsum, wden = 0.0, 0.0
+        for label in voter_set:
+            if label in scores:
+                w = weights.get(label, 1.0)
+                wsum += w * scores[label]
+                wden += w
+        vote = wsum / wden if wden else 0.0
+
+        if vote < threshold:
+            rejections["vote_threshold"].append(t)
+            log.info("REJECT %s vote %.2f < %.2f", t, vote, threshold)
+            continue
+
+        survivors.append({"ticker": t, "scores": scores,
+                          "reasonings": reasonings,
+                          "vote": round(vote, 2),
+                          "total": round(sum(scores.values()), 1),
+                          "sector": data["sector"],
+                          "_data": data})
 
     # ---- Phase 4: boost survivors with a scheduled catalyst in the hold window ----
     hold = cfg["backtest"]["hold_days"]
@@ -130,7 +157,9 @@ def run(universe=None, period="3y", top_n=15, verbose=True):
             s["scores"]["catalyst"] = cat["boost"]
             s["total"] = round(s["total"] + cat["boost"], 1)
 
-    survivors.sort(key=lambda s: s["total"], reverse=True)
+    # Rank by the weighted vote first; catalyst boost is a tiebreaker on top.
+    survivors.sort(key=lambda s: (s["vote"], s.get("scores", {}).get("catalyst", 0)),
+                   reverse=True)
     if verbose:
         _print_summary(universe, rejections, survivors, top_n)
     return {"regime": regime, "survivors": survivors[:top_n],
@@ -194,15 +223,18 @@ def _print_summary(universe, rejections, survivors, top_n):
     print(f"\n[funnel] {len(universe)} in -> {len(survivors)} survivors")
     print("  Rejections by gate:")
     for label, _ in CHAIN:
-        n = len(rejections[label])
+        n = len(rejections.get(label, []))
         if n:
             print(f"    {label:<24} -{n}")
+    n_vote = len(rejections.get("vote_threshold", []))
+    if n_vote:
+        print(f"    {'vote_threshold':<24} -{n_vote}")
     print(f"\n  Nightly top {min(top_n, len(survivors))} candidates:")
-    print(f"  {'#':>2}  {'ticker':<6} {'total':>6}  {'sector':<22} catalyst")
+    print(f"  {'#':>2}  {'ticker':<6} {'vote':>5}  {'sector':<22} catalyst")
     for i, s in enumerate(survivors[:top_n], 1):
         cat = s.get("catalyst")
         cat_txt = (f"{cat['type']} in {cat['days_out']}d" if cat else "-- none in window")
-        print(f"  {i:>2}  {s['ticker']:<6} {s['total']:>6.1f}  "
+        print(f"  {i:>2}  {s['ticker']:<6} {s.get('vote', 0):>5.2f}  "
               f"{str(s['sector'] or '?'):<22} {cat_txt}")
 
 

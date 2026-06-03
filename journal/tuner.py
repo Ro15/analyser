@@ -27,6 +27,18 @@ def load_weights():
         return {}
 
 
+def effective_weights(defaults=None):
+    """Merge learned weights over the config defaults; missing gates get 1.0.
+
+    Used by engine/funnel.run() to score the weighted vote. Three tiers:
+    learned (.state/gate_weights.json) overrides default (config.yaml) overrides
+    a neutral 1.0. Until the tuner has data (~20 closed trades), defaults rule.
+    """
+    merged = dict(defaults or {})
+    merged.update(load_weights())
+    return merged
+
+
 def _save(weights):
     os.makedirs(os.path.dirname(_PATH), exist_ok=True)
     with open(_PATH, "w") as f:

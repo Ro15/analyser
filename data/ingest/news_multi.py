@@ -108,18 +108,26 @@ def _from_alpaca(ticker):
         return []
 
 
-def _from_yfinance(ticker):
-    try:
-        out = []
-        for it in (yf.Ticker(ticker).news or [])[:10]:
-            c = it.get("content") or it
-            title = c.get("title") or ""
-            if title:
-                out.append(_item(title, c.get("summary"), "yfinance",
-                                 c.get("pubDate") or c.get("providerPublishTime")))
-        return out
-    except Exception:
-        return []
+def _from_yfinance(ticker, timeout=8):
+    """yf.Ticker(t).news has no timeout and can hang for minutes; bound it."""
+    import threading
+    out = []
+
+    def _do():
+        try:
+            for it in (yf.Ticker(ticker).news or [])[:10]:
+                c = it.get("content") or it
+                title = c.get("title") or ""
+                if title:
+                    out.append(_item(title, c.get("summary"), "yfinance",
+                                     c.get("pubDate") or c.get("providerPublishTime")))
+        except Exception:
+            pass
+
+    th = threading.Thread(target=_do, daemon=True)
+    th.start()
+    th.join(timeout)
+    return out  # whatever we got; abandoned if still running
 
 
 def _from_yahoo_rss(ticker):
