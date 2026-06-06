@@ -4,7 +4,8 @@
 # errors (errno 11 / pyarrow mmap timeouts). One retry minute apart almost
 # always succeeds.
 set -uo pipefail
-PROJ="/Users/ro/Desktop/analyser"
+# Resolve project dir from this script's location -- never hardcode the path.
+PROJ="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PY="$PROJ/venv/bin/python"
 LOG="$PROJ/.state/scan.log"
 
