@@ -80,11 +80,14 @@ def format_alert(plan, news=None, veteran=None, read_through=None,
     lines.append(f"Time stop: {plan['time_stop']}")
 
     if plan.get("conviction") is not None:
-        p = plan.get("probability_15pct_90d")
-        ptxt = f", p(+15%/90d) {p:.0%}" if isinstance(p, (int, float)) else ""
-        lines.append(f"Conviction: {plan['conviction']}/5{ptxt}")
+        p = plan.get("p_target_90d")
+        ptxt = (f", p(+{int(plan['target_pct']*100)}%/90d) {p:.0%}"
+                if isinstance(p, (int, float)) else "")
+        lines.append(f"Conviction: {plan['conviction']}/10{ptxt}")
+    if plan.get("size"):
+        lines.append(f"Position size: {plan['size'].upper()}")
     if veteran:
-        lines.append(f"\n*Veteran review:* {veteran}")
+        lines.append(f"\n*Judge (AI debate):* {veteran}")
     if read_through:
         lines.append(f"\nRead-through: {', '.join(read_through)}")
     return "\n".join(lines)
