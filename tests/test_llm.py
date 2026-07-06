@@ -4,8 +4,7 @@ import numpy as np
 import pytest
 
 from engine import llm_client
-from gates import (g8_news_catalyst, g8_3_propagation, g8_5_sentiment,
-                   g9_veteran_review)
+from gates import g8_news_catalyst, g8_3_propagation, g8_5_sentiment
 from tests.conftest import _frame
 
 
@@ -89,28 +88,20 @@ def test_sentiment_calm_neutral():
     assert res.score == 5.0
 
 
-# ---- Gate 9 veteran ----
+# ---- V2 debate stage ----
 
-def test_veteran_reject_low_conviction(monkeypatch):
-    monkeypatch.setattr(llm_client, "call_claude",
-                        lambda *a, **k: json.dumps({"verdict": "would take",
-                                                    "conviction": 2}))
-    res = g9_veteran_review.check("X", {"sector": "Tech"})
-    assert not res.passed
-
-
-def test_veteran_approve(monkeypatch):
-    monkeypatch.setattr(llm_client, "call_claude",
-                        lambda *a, **k: json.dumps({"verdict": "would take",
-                                                    "conviction": 4,
-                                                    "probability_15pct_90d": 0.4}))
-    res = g9_veteran_review.check("X", {"sector": "Tech"})
-    assert res.passed and res.score > 5
-
-
-def test_veteran_unavailable_neutral(monkeypatch):
-    def _raise(*a, **k):
-        raise llm_client.LLMUnavailable("no key")
-    monkeypatch.setattr(llm_client, "call_claude", _raise)
-    res = g9_veteran_review.check("X", {"sector": "Tech"})
-    assert res.passed and "UN-VETTED" in res.reasoning
+def test_llm_stage_uses_debate(monkeypatch):
+    monkeypatch.setenv("LLM_MOCK", "1")
+    from engine import funnel
+    survivors = [{"ticker": "NVDA", "total": 50.0, "sector": "Tech",
+                  "catalyst": {"type": "earnings", "date": "2026-08-10",
+                               "days_out": 35},
+                  "scores": {"g2_trend": 8.0}, "reasonings": {},
+                  "vote": 8.0, "_data": {}}]
+    out = funnel.run_llm_stage(survivors, top=1, with_propagation=False,
+                               verbose=False)
+    f = out["finalists"][0]
+    assert "debate" in f and "veteran" not in f
+    assert f["debate"]["verdict"] == "take"
+    # mock judge: conviction 7 >= 6 and p 0.44 >= 0.35 and mock news passes
+    assert f["llm_passed"] is True
