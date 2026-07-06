@@ -22,6 +22,7 @@ from gates import (
     g0_regime, g1_liquidity, g2_trend, g2_5_macro, g3_sector,
     g4_relative_strength, g5_setups, g5_3_priced_in, g5_5_valuation,
     g5_7_fundamentals, g6_volume_flow, g6_5_smart_money,
+    g6_7_short_pressure, g6_8_options_flow,
     g7_earnings_block, g7_5_earnings_quality,
 )
 
@@ -42,6 +43,15 @@ CHAIN = [
     ("g6.5_smart_money", g6_5_smart_money),
     ("g7_earnings_block", g7_earnings_block),
     ("g7.5_earnings_quality", g7_5_earnings_quality),
+]
+
+# V2 finalist stage: enrichment-aware gates re-scored on the top-N survivors
+# AFTER engine.enrichment.enrich_finalists has injected OpenBB data.
+FINALIST_CHAIN = [
+    ("g5.3_priced_in", g5_3_priced_in),
+    ("g6.5_smart_money", g6_5_smart_money),
+    ("g6.7_short_pressure", g6_7_short_pressure),
+    ("g6.8_options_flow", g6_8_options_flow),
 ]
 
 
@@ -159,6 +169,41 @@ def run(universe=None, period="3y", top_n=15, verbose=True):
         _print_summary(universe, rejections, survivors, top_n)
     return {"regime": regime, "survivors": survivors[:top_n],
             "all_survivors": survivors, "rejections": rejections}
+
+
+def run_finalist_gates(finalists, verbose=True):
+    """Re-score the enrichment-aware gates, recompute the weighted vote, and
+    drop names the priced-in gate now hard-rejects (expected move >= target)."""
+    cfg = load_config()
+    funnel_cfg = cfg.get("funnel") or {}
+    voter_set = set(funnel_cfg.get("voters", [])) | {lbl for lbl, _ in FINALIST_CHAIN}
+    weights = tuner.effective_weights(funnel_cfg.get("default_weights", {}))
+
+    kept, dropped = [], []
+    for s in finalists:
+        data = s.get("_data", {})
+        rejected = None
+        for label, gate in FINALIST_CHAIN:
+            res = gate.check(s["ticker"], data)
+            s.setdefault("scores", {})[label] = res.score
+            s.setdefault("reasonings", {})[label] = res.reasoning
+            if label == "g5.3_priced_in" and not res.passed:
+                rejected = res.reasoning
+                break
+        if rejected:
+            s["drop_reason"] = rejected
+            dropped.append(s)
+            continue
+        s["vote"] = round(voting.compute_vote(s["scores"], voter_set, weights), 2)
+        kept.append(s)
+
+    kept.sort(key=lambda s: (s["vote"], s.get("scores", {}).get("catalyst", 0)),
+              reverse=True)
+    if verbose and dropped:
+        print("\n[funnel] finalist enrichment dropped:")
+        for d in dropped:
+            print(f"    {d['ticker']}: {d['drop_reason']}")
+    return kept, dropped
 
 
 def run_llm_stage(survivors, top=None, with_propagation=True, verbose=True):
