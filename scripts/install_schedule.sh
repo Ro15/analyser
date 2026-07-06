@@ -30,9 +30,8 @@ cat > "$PLIST" <<EOF
     <string>${LABEL}</string>
     <key>ProgramArguments</key>
     <array>
-        <string>${PY}</string>
-        <string>${PROJ_DIR}/scan.py</string>
-        <string>--live</string>
+        <string>/bin/bash</string>
+        <string>${PROJ_DIR}/scripts/run_nightly.sh</string>
     </array>
     <key>WorkingDirectory</key>
     <string>${PROJ_DIR}</string>
@@ -62,7 +61,8 @@ launchctl load -w "$PLIST"
 echo "Installed nightly schedule:"
 echo "  Label:   ${LABEL}"
 echo "  Runs:    22:00 local time, Mon-Fri"
-echo "  Command: ${PY} ${PROJ_DIR}/scan.py --live"
+echo "  Wrapper: ${PROJ_DIR}/scripts/run_nightly.sh (retries up to 3x on startup failure)"
+echo "  Inside:  ${PY} ${PROJ_DIR}/scan.py --live"
 echo "  Log:     ${LOG_DIR}/scan.log"
 echo
 launchctl list | grep analyser || echo "(launchctl list didn't show it -- might need a few seconds)"

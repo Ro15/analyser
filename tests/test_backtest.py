@@ -47,4 +47,4 @@ def test_metrics_basic():
     m = metrics.compute_metrics(df)
     assert m["alerts"] == 3
     assert m["win_rate"] == pytest.approx(2 / 3)
-    assert m["hit_target_rate"] == pytest.approx(2 / 3)  # 0.25 and 0.16 >= 0.15
+    assert m["hit_target_rate"] == pytest.approx(1 / 3)  # only 0.25 >= 0.20 target

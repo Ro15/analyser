@@ -22,6 +22,7 @@ from gates import (
     g0_regime, g1_liquidity, g2_trend, g2_5_macro, g3_sector,
     g4_relative_strength, g5_setups, g5_3_priced_in, g5_5_valuation,
     g5_7_fundamentals, g6_volume_flow, g6_5_smart_money,
+    g6_7_short_pressure, g6_8_options_flow,
     g7_earnings_block, g7_5_earnings_quality,
 )
 
@@ -42,6 +43,15 @@ CHAIN = [
     ("g6.5_smart_money", g6_5_smart_money),
     ("g7_earnings_block", g7_earnings_block),
     ("g7.5_earnings_quality", g7_5_earnings_quality),
+]
+
+# V2 finalist stage: enrichment-aware gates re-scored on the top-N survivors
+# AFTER engine.enrichment.enrich_finalists has injected OpenBB data.
+FINALIST_CHAIN = [
+    ("g5.3_priced_in", g5_3_priced_in),
+    ("g6.5_smart_money", g6_5_smart_money),
+    ("g6.7_short_pressure", g6_7_short_pressure),
+    ("g6.8_options_flow", g6_8_options_flow),
 ]
 
 
@@ -161,19 +171,61 @@ def run(universe=None, period="3y", top_n=15, verbose=True):
             "all_survivors": survivors, "rejections": rejections}
 
 
-def run_llm_stage(survivors, top=None, with_propagation=True, verbose=True):
-    """Phase-5 LLM layer on the final survivors: news (8), sentiment (8.5),
-    veteran review (9), plus propagation (8.3). Runs only on `max_finalists`.
+def run_finalist_gates(finalists, verbose=True):
+    """Re-score the enrichment-aware gates, recompute the weighted vote, and
+    drop names the priced-in gate now hard-rejects (expected move >= target)."""
+    cfg = load_config()
+    funnel_cfg = cfg.get("funnel") or {}
+    voter_set = set(funnel_cfg.get("voters", [])) | {lbl for lbl, _ in FINALIST_CHAIN}
+    weights = tuner.effective_weights(funnel_cfg.get("default_weights", {}))
 
-    With no API keys, gates degrade to neutral passes (or run on LLM_MOCK=1).
-    Returns {"finalists": [...], "propagated": {ticker: reason}}.
+    kept, dropped = [], []
+    for s in finalists:
+        data = s.get("_data", {})
+        rejected = None
+        for label, gate in FINALIST_CHAIN:
+            res = gate.check(s["ticker"], data)
+            s.setdefault("scores", {})[label] = res.score
+            s.setdefault("reasonings", {})[label] = res.reasoning
+            if label == "g5.3_priced_in" and not res.passed:
+                rejected = res.reasoning
+                break
+        if rejected:
+            s["drop_reason"] = rejected
+            dropped.append(s)
+            continue
+        s["vote"] = round(voting.compute_vote(s["scores"], voter_set, weights), 2)
+        kept.append(s)
+
+    kept.sort(key=lambda s: (s["vote"], s.get("scores", {}).get("catalyst", 0)),
+              reverse=True)
+    if verbose and dropped:
+        print("\n[funnel] finalist enrichment dropped:")
+        for d in dropped:
+            print(f"    {d['ticker']}: {d['drop_reason']}")
+    return kept, dropped
+
+
+def run_llm_stage(survivors, top=None, with_propagation=True, verbose=True):
+    """Phase-5 LLM layer on enriched finalists: news (8), sentiment (8.5),
+    bull/bear/judge debate (V2, replaces gate 9), propagation (8.3).
+
+    With no API keys the debate degrades to "unvetted" (never a buy) and the
+    news/sentiment gates to neutral passes; LLM_MOCK=1 runs the whole stage
+    offline with canned JSON.
     """
     from data.ingest import news_multi
-    from gates import (g8_news_catalyst, g8_3_propagation, g8_5_sentiment,
-                       g9_veteran_review)
+    from engine import debate
+    from gates import g8_news_catalyst, g8_3_propagation, g8_5_sentiment
+    from journal import playbook
 
-    cfg = load_config()["llm"]
-    finalists = survivors[: top or cfg["max_finalists"]]
+    cfg = load_config()
+    dcfg = cfg.get("debate", {})
+    min_conv = int(dcfg.get("min_conviction", 6))
+    min_p = float(dcfg.get("min_p_target", 0.35))
+
+    finalists = survivors[: top or cfg["llm"]["max_finalists"]]
+    lessons = playbook.lessons_text()
     out = []
     for s in finalists:
         t = s["ticker"]
@@ -183,14 +235,17 @@ def run_llm_stage(survivors, top=None, with_propagation=True, verbose=True):
             d["headlines"] = headlines
         news = g8_news_catalyst.check(t, d)
         sentiment = g8_5_sentiment.check(t, d)
-        vet_data = {**d, "gate_scores": s["scores"], "catalyst": s.get("catalyst"),
-                    "setup": s.get("reasonings", {}).get("g5_setups"),
-                    "news_summary": news.reasoning}
-        veteran = g9_veteran_review.check(t, vet_data)
-        llm_passed = news.passed and veteran.passed
+        ctx = {**d, "gate_scores": s.get("scores", {}),
+               "catalyst": s.get("catalyst"),
+               "setup": s.get("reasonings", {}).get("g5_setups"),
+               "news_summary": news.reasoning, "playbook": lessons}
+        deb = debate.run_debate(t, ctx)
+        llm_passed = (news.passed and deb["verdict"] == "take"
+                      and deb["conviction"] >= min_conv
+                      and (deb["p_target_90d"] or 0.0) >= min_p)
         out.append({"ticker": t, "total": s["total"], "sector": s.get("sector"),
                     "catalyst": s.get("catalyst"),
-                    "news": news, "sentiment": sentiment, "veteran": veteran,
+                    "news": news, "sentiment": sentiment, "debate": deb,
                     "llm_passed": llm_passed})
 
     propagated = {}
@@ -204,8 +259,10 @@ def run_llm_stage(survivors, top=None, with_propagation=True, verbose=True):
               f"(mock={__import__('os').getenv('LLM_MOCK')=='1'}):")
         for r in out:
             v = "PASS" if r["llm_passed"] else "REJECT"
+            deb = r["debate"]
             print(f"  [{v}] {r['ticker']:<6} news: {r['news'].reasoning}")
-            print(f"          veteran: {r['veteran'].reasoning}")
+            print(f"          judge: {deb['verdict']} conviction {deb['conviction']}/10 "
+                  f"p={deb['p_target_90d']} size={deb['size']} -- {deb['reasoning']}")
             print(f"          {r['sentiment'].reasoning}")
         if propagated:
             print("  Read-through candidates added by propagation:")

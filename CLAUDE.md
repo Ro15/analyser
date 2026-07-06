@@ -3,7 +3,7 @@
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## What this is
-Catalyst Anticipation Swing Bot: find US stocks likely to rise 15%+ in 60-90 days because a catalyst is COMING (not yet priced in), confirmed by fundamentals, flow, and smart money; filter out overvalued tops and accounting traps. Entry on alert, hold 60-90 days, scale out at +15%, exit via catalyst-invalidation (NOT a hard price stop) + time stop at catalyst date + buffer. PAPER TRADING ONLY for the first 6 months.
+Catalyst Anticipation Swing Bot: find US stocks likely to rise 20%+ in 60-90 days because a catalyst is COMING (not yet priced in), confirmed by fundamentals, flow, and smart money; filter out overvalued tops and accounting traps. Entry on alert, hold 60-90 days, scale out at +20% (config `backtest.target_pct`), exit via catalyst-invalidation (NOT a hard price stop) + time stop at catalyst date + buffer. PAPER TRADING ONLY for the first 6 months.
 
 ## Commands
 Setup (Python 3.11+; a venv already lives in `venv/`):
@@ -18,7 +18,9 @@ Run everything through the venv interpreter (`./venv/bin/python ...`):
 ./venv/bin/python -m pytest -k valuation            # tests matching a keyword
 ./venv/bin/python analyze.py NVDA                   # single-stock Phase-1 report (gates 0,1,2,5)
 LLM_MOCK=1 ./venv/bin/python scan.py --universe 40  # full nightly pipeline, no keys/network for LLM, Telegram dry-run
+./venv/bin/python scan.py --shadow                  # live data; NO journal writes, NO Telegram
 ./venv/bin/python scan.py --live                    # real run; sends Telegram only if TELEGRAM_* set
+./venv/bin/python scripts/obb_smoke.py AAPL         # live smoke of the OpenBB fetchers
 ./venv/bin/python -m backtest.harness               # replay core gates vs SPY (prints optimism warning)
 ./venv/bin/python -m journal.dashboard              # paper P&L vs SPY
 ./venv/bin/python -m journal.tuner                  # nudge gate weights from realized returns
@@ -37,6 +39,8 @@ Three entry points sit on top of one shared gate library: `analyze.py` (single s
 
 **LLM stage** (`funnel.run_llm_stage`, runs only on `max_finalists`): gate 8 news (DeepSeek), 8.5 sentiment, 8.3 propagation/read-through, 9 veteran review (Claude). `engine/llm_client.py` reads keys from `.env`, enforces a HARD monthly $ cap (`.state/llm_cost.json`), and degrades gracefully: no key -> neutral pass, or set `LLM_MOCK=1` for deterministic canned JSON so the whole pipeline runs offline.
 
+**V2 finalist stage** (`engine/enrichment.py` + `funnel.run_finalist_gates`): the top `max_finalists` survivors get OpenBB enrichment (stockgrid short volume, FINRA short interest, yfinance options with straddle-implied expected move, SEC insiders, analyst consensus — all keyless, cached in `.cache/obb/`, `None` on failure -> neutral gates), then gates 5.3/6.5/6.7/6.8 re-score and the vote is recomputed. The LLM stage runs a bull/bear/judge debate (`engine/debate.py`) instead of a single veteran review; the judge reads `.state/playbook.md` (lessons distilled from every closed trade by `journal/postmortem.py`). After alerts, `journal/position_review.py` red-flags open positions and lets the judge close broken theses (`resolution: thesis_broken`). `alerts/digest.py` sends ONE digest every market night (buys/watchlist/exits/pulse).
+
 **After the LLM stage** (`scan.py`): gate 9.5 correlation/concentration filter -> gate 10 structuring (`engine/structuring.py`: entry zone, +15% target with scale-out, catalyst-invalidation exit, time stop) -> `journal/tracker.log_alert` -> `alerts/formatter` -> `alerts/telegram_bot` (dry-run unless `TELEGRAM_*` configured).
 
 **Data layer**: `backtest/data_cache.py` fetches each ticker's history once via `data/ingest/prices.py` (yfinance) and caches in-memory + `.cache/*.parquet`. `data/store.py` is the optional Postgres OHLCV store, guarded by `is_available()` so tests and the live path skip cleanly without a DB.
@@ -52,6 +56,8 @@ State/cache dirs are gitignored: `.cache/` (parquet bars), `.state/` (`llm_cost.
 - Gate 10 catalyst-invalidation exit: always define a concrete way out.
 - Backtest must beat SPY after costs before going live; do not move to real capital until paper results beat SPY over the full 6-month window.
 - NEVER hardcode or commit API keys. All secrets come from `.env` via environment variables.
+- Position review may close early ONLY via the LLM judge on >=2 deterministic red flags; price weakness alone never closes a position, and no judge = no close.
+- An "unvetted" debate verdict (no LLM available) can never become a buy alert.
 
 ## Conventions
 - One gate per file `gates/gN_name.py` with `check(ticker, data) -> GateResult`; log every rejection with its reason.

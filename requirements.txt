@@ -10,3 +10,6 @@ lxml
 pyarrow
 feedparser
 beautifulsoup4
+openbb
+openbb-stockgrid
+openbb-finra

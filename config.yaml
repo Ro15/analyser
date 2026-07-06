@@ -52,6 +52,8 @@ funnel:
     - g5.7_fundamentals
     - g7.5_earnings_quality
     - g6.5_smart_money
+    - g6.7_short_pressure
+    - g6.8_options_flow
   default_weights:
     g2_trend: 1.2
     g4_rel_strength: 1.2
@@ -62,6 +64,8 @@ funnel:
     g5.7_fundamentals: 1.1
     g7.5_earnings_quality: 1.0
     g6.5_smart_money: 0.8
+    g6.7_short_pressure: 0.9
+    g6.8_options_flow: 0.9
 
 # LLM layer (Phase 5) -- keys come from .env, never hardcoded
 llm:
@@ -77,5 +81,38 @@ backtest:
   step_days: 5             # evaluate gates every N trading days
   hold_days: 90            # forward holding window (calendar days)
   slippage_pct: 0.001      # 0.1% slippage applied each side
-  target_pct: 0.15         # +15% target
+  target_pct: 0.20         # +20% target (V2; was 0.15)
   min_history_bars: 260    # require ~1y history before first eval
+
+# ---- V2: finalist enrichment gates (OpenBB free data) ----
+short_pressure:
+  trend_sessions: 10          # short-volume trend window (sessions)
+  trend_delta: 0.10           # relative change treated as rising/falling
+  dtc_squeeze_min: 5.0        # days-to-cover >= this = squeeze fuel
+  squeeze_fund_min: 7.0       # g5.7 score needed for the squeeze bonus
+options_flow:
+  min_total_volume: 200       # thinner options market -> neutral pass
+  call_put_bull: 2.0          # call/put volume ratio >= this -> bullish boost
+  call_put_bear: 0.5          # call/put volume ratio <= this -> bearish penalty
+priced_in:
+  lookback_days: 21
+  run_up_max: 0.10
+  edge_confirm_ratio: 0.6     # implied move < 60% of target -> edge bonus
+insider:
+  window_days: 60
+  cluster_buys: 2             # >= this many buys (and no sells) -> boost
+  heavy_sells: 3              # sells >= this and > buys -> penalty
+
+# ---- V2: debate / review / digest / playbook ----
+debate:
+  min_conviction: 6           # judge conviction (1-10) below this -> no buy
+  min_p_target: 0.35          # p(+target/90d) below this -> watchlist only
+position_review:
+  min_flags: 2                # red flags needed before the judge is asked
+  trend_break_pct: 0.03       # close below 50DMA by more than this = flag
+  catalyst_grace_days: 5      # catalyst passed N days ago without move = flag
+  short_spike_ratio: 1.5      # latest short% vs median above this = flag
+digest:
+  watchlist_size: 3
+playbook:
+  max_lessons: 40             # compaction cap for .state/playbook.md

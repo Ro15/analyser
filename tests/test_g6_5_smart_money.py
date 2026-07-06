@@ -14,3 +14,19 @@ def test_no_data_neutral():
     res = g6_5_smart_money.check("X", data)
     assert res.passed
     assert res.score == 5.0
+
+
+def test_insider_buy_cluster_boosts():
+    base = {"form4_count": 0, "info": {}}
+    plain = g6_5_smart_money.check("X", base)
+    boosted = g6_5_smart_money.check("X", {**base, "insider": {"buys": 3, "sells": 0}})
+    assert boosted.score == plain.score + 2.0
+    assert "buying cluster" in boosted.reasoning
+
+
+def test_heavy_insider_selling_penalized():
+    base = {"form4_count": 0, "info": {}}
+    plain = g6_5_smart_money.check("X", base)
+    hit = g6_5_smart_money.check("X", {**base, "insider": {"buys": 0, "sells": 4}})
+    assert hit.score == max(0.0, plain.score - 2.0)
+    assert "selling" in hit.reasoning

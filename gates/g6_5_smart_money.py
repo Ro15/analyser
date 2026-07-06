@@ -1,14 +1,17 @@
-"""Gate 6.5 -- smart money (insider / institutional).
+"""Gate 6.5 -- smart money (insider / institutional). V2.
 
-Strong BOOST when there's an insider Form 4 cluster (and, where available,
-institutional ownership is high/rising). This gate never hard-rejects on its
-own -- absence of insider buying isn't bearish -- it only adds conviction.
+BOOST on an insider Form 4 cluster and (V2) on directional SEC insider BUYING
+in the last window_days; PENALTY on heavy insider selling. Institutional
+ownership still adds a small boost. This gate never hard-rejects on its own --
+absence of insider activity isn't bearish.
 
-DATA: SEC EDGAR Form 4 (timely) + yfinance institutional ownership %. 13F adds
-lag ~45 days (noted). Degrades to neutral when EDGAR is unreachable.
+DATA: data["insider"] (SEC via openbb_source, injected at the finalist stage),
+EDGAR Form 4 counts, yfinance institutional %. Degrades to neutral when
+sources are unreachable.
 """
 from data.ingest import edgar
 from engine import fundamentals
+from engine.config import load_config
 from engine.types import GateResult
 
 _CLUSTER = 3  # >= this many Form 4s in the window = cluster activity
@@ -37,6 +40,19 @@ def check(ticker, data):
         if inst >= 0.70:
             score += 1.0
 
-    score = round(min(10.0, score), 2)
+    # V2: directional insider activity from SEC (openbb_source.insider_activity).
+    ins = data.get("insider") or {}
+    buys, sells = ins.get("buys"), ins.get("sells")
+    if isinstance(buys, int) and isinstance(sells, int):
+        icfg = load_config().get("insider", {})
+        notes.append(f"SEC {icfg.get('window_days', 60)}d: {buys} buys / {sells} sells")
+        if buys >= int(icfg.get("cluster_buys", 2)) and sells == 0:
+            score += 2.0
+            notes.append("insider buying cluster -> boost")
+        elif sells >= int(icfg.get("heavy_sells", 3)) and sells > buys:
+            score -= 2.0
+            notes.append("heavy insider selling -> penalty")
+
+    score = round(max(0.0, min(10.0, score)), 2)
     # Pass-through gate: always passes, score carries the conviction signal.
     return GateResult(True, score, f"Smart money: {'; '.join(notes)} (13F lag ~45d).")

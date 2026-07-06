@@ -42,8 +42,11 @@ def _trade_R(rec):
     return rec["realized_return"] / risk
 
 
-def build(records=None):
+def build(records=None, pipeline_version=None):
     records = records if records is not None else tracker.all_alerts()
+    if pipeline_version is not None:
+        records = [r for r in records
+                   if (r.get("pipeline_version") or 1) == pipeline_version]
     closed = [r for r in records if r.get("realized_return") is not None]
     open_ = [r for r in records if r["status"] == "open"]
 
@@ -84,7 +87,14 @@ def print_dashboard(records=None):
     print(f"  Cumulative return : {d['cum_return']*100:+.2f}%")
     print(f"  SPY (same windows): {d['spy_cum_return']*100:+.2f}%")
     print(f"  Excess vs SPY     : {d['excess_vs_spy']*100:+.2f}%")
-    print(bar)
+    all_recs = records if records is not None else tracker.all_alerts()
+    versions = {(r.get("pipeline_version") or 1) for r in all_recs}
+    if len(versions) > 1:
+        for v in sorted(versions):
+            dv = build(all_recs, pipeline_version=v)
+            print(f"  V{v}: {dv['n_closed']} closed, win {dv['win_rate']*100:.0f}%, "
+                  f"cum {dv['cum_return']*100:+.1f}% vs SPY {dv['spy_cum_return']*100:+.1f}%")
+        print(bar)
     print("  REMINDER: do NOT move to real capital until paper results beat SPY")
     print("  after costs over the full 6-month validation window.")
     print(bar)
