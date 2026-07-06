@@ -33,7 +33,8 @@ def _write_all(records):
 
 
 def log_alert(plan, *, setup=None, sector=None, regime=None, conviction=None,
-              probability=None, scores=None, today=None):
+              probability=None, scores=None, today=None, pipeline_version=None,
+              size=None, kill_condition=None, debate=None):
     today = today or dt.date.today()
     rec = {
         "id": f"{plan['ticker']}-{today.isoformat()}",
@@ -49,8 +50,13 @@ def log_alert(plan, *, setup=None, sector=None, regime=None, conviction=None,
         "sector": sector,
         "regime": regime,
         "conviction": conviction,
-        "probability_15pct_90d": probability,
+        "p_target_90d": probability,
         "scores": scores,
+        "pipeline_version": pipeline_version,
+        "size": size,
+        "kill_condition": kill_condition,
+        "debate": debate,
+        "postmortem_done": False,
         "resolution": None,
         "catalyst_happened": None,
         "realized_return": None,
@@ -74,6 +80,15 @@ def resolve(alert_id, *, resolution, realized_return=None, catalyst_happened=Non
             r["realized_return"] = realized_return
             r["catalyst_happened"] = catalyst_happened
             r["resolved_on"] = (on or dt.date.today()).isoformat()
+    _write_all(records)
+
+
+def set_fields(alert_id, **fields):
+    """Merge arbitrary fields into one journal record (e.g. postmortem_done)."""
+    records = _read()
+    for r in records:
+        if r["id"] == alert_id:
+            r.update(fields)
     _write_all(records)
 
 
