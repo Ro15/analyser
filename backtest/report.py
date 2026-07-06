@@ -18,6 +18,12 @@ def print_report(df):
     print("  OPTIMISTIC and overstate the true edge. Treat as an upper bound.")
     print(_BAR)
 
+    # V2 guardrail: these signals have no free history, so the replay can't
+    # include them -- paper trading is their only validation.
+    print("  V2 NOTE: options-flow / short-volume / insider gates are NOT in")
+    print("  this replay (no free history); validated in paper trading only.")
+    print(_BAR)
+
     if m["alerts"] == 0:
         print("  No alerts generated -- nothing to evaluate.")
         print(_BAR)
