@@ -1,31 +1,53 @@
-"""Gate 5.3 -- "already priced in" detector.
+"""Gate 5.3 -- "already priced in" detector (V2).
 
-If a stock has already run up >= run_up_max (default +10%) over the recent
-window, the anticipated catalyst is likely already in the price -> REJECT.
-Conviction is reduced proportionally to any run-up below that threshold.
+Two checks, cheap first:
+  1. Price run-up: >= run_up_max over the lookback -> the move already
+     happened -> REJECT (as in V1, thresholds now in config).
+  2. Options expected move (finalist stage, when data["options"] present):
+     the ATM straddle at the post-catalyst expiry is the move the market
+     already expects. Implied >= our target -> the catalyst is priced in ->
+     REJECT. Implied well below target -> our edge is NOT in the price ->
+     bonus. This turns the bot's core thesis into a measurement.
 """
+from engine.config import load_config
 from engine.types import GateResult
-
-_LOOKBACK = 21        # ~1 month
-_RUNUP_MAX = 0.10     # +10% recent move = likely priced in
 
 
 def check(ticker, data):
+    cfg = load_config()
+    pcfg = cfg.get("priced_in", {})
+    lookback = int(pcfg.get("lookback_days", 21))
+    runup_max = float(pcfg.get("run_up_max", 0.10))
+    edge_ratio = float(pcfg.get("edge_confirm_ratio", 0.6))
+    target = float(cfg["backtest"]["target_pct"])
+
     bars = data.get("bars")
-    if bars is None or len(bars) <= _LOOKBACK:
+    if bars is None or len(bars) <= lookback:
         return GateResult(False, 0.0, f"{ticker}: insufficient history.")
 
     c = bars["close"]
-    runup = float(c.iloc[-1] / c.iloc[-1 - _LOOKBACK] - 1)
-
-    if runup >= _RUNUP_MAX:
+    runup = float(c.iloc[-1] / c.iloc[-1 - lookback] - 1)
+    if runup >= runup_max:
         return GateResult(False, 0.0,
-                          f"Likely priced in: +{runup*100:.1f}% over {_LOOKBACK}d "
-                          f">= +{_RUNUP_MAX*100:.0f}% threshold. Move may already be made.")
+                          f"Likely priced in: +{runup*100:.1f}% over {lookback}d "
+                          f">= +{runup_max*100:.0f}% threshold.")
 
-    # Below threshold: full score when flat/down, scaling down toward 0 near it.
-    frac = max(0.0, runup) / _RUNUP_MAX
-    score = round(10 * (1 - frac), 2)
-    return GateResult(True, score,
-                      f"Room to run: {runup*100:+.1f}% over {_LOOKBACK}d "
-                      f"(< +{_RUNUP_MAX*100:.0f}%); conviction x{1-frac:.2f}.")
+    frac = max(0.0, runup) / runup_max
+    score = 10 * (1 - frac)
+    notes = [f"run-up {runup*100:+.1f}%/{lookback}d ok"]
+
+    em = (data.get("options") or {}).get("expected_move_pct")
+    if isinstance(em, (int, float)):
+        if em >= target:
+            return GateResult(False, 0.0,
+                              f"Priced in by options: implied move {em:.0%} >= "
+                              f"target {target:.0%} "
+                              f"(expiry {(data.get('options') or {}).get('expiry_used')}).")
+        if em <= target * edge_ratio:
+            score = min(10.0, score + 2.0)
+            notes.append(f"options imply only {em:.0%} vs target {target:.0%} "
+                         "-> edge not priced in")
+        else:
+            notes.append(f"options imply {em:.0%} (target {target:.0%})")
+
+    return GateResult(True, round(score, 2), "Room to run: " + "; ".join(notes) + ".")
