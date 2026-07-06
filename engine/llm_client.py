@@ -180,26 +180,28 @@ def _mock_response(provider, user, system="", json_mode=True):
                 "uptrend with a defined entry; risk/reward asymmetric.")
 
     # V2 debate + review mocks (must precede the provider=="claude" branch).
-    if "bull" in sys_lower and "case" in sys_lower:
-        return json.dumps({"case": "[MOCK BULL] Catalyst underappreciated; options "
-                                   "flow and insiders align; base intact.",
-                           "strongest_points": ["[MOCK] call buying",
-                                                "[MOCK] insider cluster"]})
-    if "bear" in sys_lower and "case" in sys_lower:
-        return json.dumps({"case": "[MOCK BEAR] Move partly priced in; sector "
-                                   "crowded; catalyst may slip.",
-                           "strongest_points": ["[MOCK] run-up", "[MOCK] crowding"]})
-    if "judge" in sys_lower:
+    # NOTE: the judge prompt mentions "bull and bear cases", so match the
+    # judge/reviewer roles FIRST, then the analyst roles by their exact titles.
+    if "judge of a trading debate" in sys_lower:
         return json.dumps({"verdict": "take", "conviction": 7, "p_target_90d": 0.44,
                            "size": "half",
                            "kill_condition": "[MOCK] catalyst cancelled or guidance cut",
                            "reasoning": "[MOCK] Bear case largely priced in; "
                                         "asymmetric risk/reward."})
-    if "post-mortem" in sys_lower:
-        return json.dumps({"lesson": "[MOCK] Overweighted trend; catalyst timing slipped."})
     if "position review" in sys_lower:
         return json.dumps({"thesis_dead": False,
                            "reasoning": "[MOCK] Catalyst still scheduled; structure intact."})
+    if "post-mortem" in sys_lower:
+        return json.dumps({"lesson": "[MOCK] Overweighted trend; catalyst timing slipped."})
+    if "bull analyst" in sys_lower:
+        return json.dumps({"case": "[MOCK BULL] Catalyst underappreciated; options "
+                                   "flow and insiders align; base intact.",
+                           "strongest_points": ["[MOCK] call buying",
+                                                "[MOCK] insider cluster"]})
+    if "bear analyst" in sys_lower:
+        return json.dumps({"case": "[MOCK BEAR] Move partly priced in; sector "
+                                   "crowded; catalyst may slip.",
+                           "strongest_points": ["[MOCK] run-up", "[MOCK] crowding"]})
 
     # Veteran-style review (used by g9; same prompt whether Claude or DeepSeek).
     if provider == "claude" or "veteran" in sys_lower or "conviction" in sys_lower:
